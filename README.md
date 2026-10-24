@@ -25,7 +25,7 @@
 可在 [Releases](https://github.com/kentye747/xiaomi-nas-ssh/releases) 下载源码 ZIP、Python wheel 和 SHA-256 校验和。也可直接在自己的虚拟环境安装固定版本：
 
 ```sh
-python -m pip install "git+https://github.com/kentye747/xiaomi-nas-ssh.git@v0.1.0"
+python -m pip install "git+https://github.com/kentye747/xiaomi-nas-ssh.git@v0.1.1"
 ```
 
 从 GitHub 下载源码后，在项目目录运行：

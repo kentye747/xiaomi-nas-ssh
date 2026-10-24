@@ -32,6 +32,20 @@ class DeviceSandboxTests(unittest.TestCase):
             patcher = patch.object(device, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        original_keys = self.root / "original-authorized_keys"
+        original_keys.write_bytes(b"synthetic-existing-key\n")
+        real_path = Path
+
+        def sandbox_paths(value):
+            if str(value) == "/root/.ssh/authorized_keys":
+                return original_keys
+            if str(value).startswith("/root/"):
+                raise AssertionError("Unexpected access outside the test sandbox")
+            return real_path(value)
+
+        paths = patch.object(device, "Path", side_effect=sandbox_paths)
+        paths.start()
+        self.addCleanup(paths.stop)
         read = Path.read_bytes
 
         def private_copy(path):
@@ -58,6 +72,7 @@ class DeviceSandboxTests(unittest.TestCase):
         self.assertIn("10.23.45.67:2222", self.unit.read_text())
         self.assertEqual((self.home / ".ssh/authorized_keys").stat().st_mode & 0o777, 0o600)
         self.assertTrue((self.stage / "status.json").exists())
+        self.assertTrue((self.home / ".ssh/authorized_keys").read_bytes().startswith(b"synthetic-existing-key\n"))
 
     def test_rollback_restores_root_only_and_preserves_later_user(self):
         with patch.object(device, "run", side_effect=self.fake_run):
