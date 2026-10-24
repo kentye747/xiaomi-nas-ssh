@@ -1,0 +1,49 @@
+# 实现与边界
+
+## 原流程的关键发现
+
+在所测试的固件中，Dropbear 会把命令交给硬编码的 `/usr/sbin/mi-shell`。密钥认证可能成功，但远端命令只返回厂商菜单。修改账户 shell 不足以解除这处程序内调用。
+
+`patch-copy` 要求 64 位小端 AArch64 ELF，且菜单路径常量恰好出现一次；只在副本中把该常量替换成 `/bin/sh` 并补零，长度和其他字节保持不变。标记缺失、重复或架构不符均拒绝，不猜偏移，不覆盖原厂文件。
+
+## 实验性引导
+
+1. 从所有者的本机证书取得 mTLS 管理身份，并校验 CA 与服务端名称。
+2. 只接受已复核固件和单一原有 SMB 账户的布局，确认原账户未变。
+3. 用一个随机口令的临时账户取得已认证、加密的管理共享。控制字符目录名用于已公开的参数处理缺陷；临时文件位于独立、随机命名的目录。
+4. 生成小型 AArch64 ELF 初始化器。仅 UID 0 可用 `renameat2(RENAME_NOREPLACE)` 原子认领加载文件，**先解除全局加载，再 fork/exec**。不建立网络监听。
+5. root-side helper 在独立目录保存原 root 条目、生成所有者自己的程序副本与主机密钥，将 root 的 home 切到可写的专用目录，保留既有 authorized_keys，并添加操作者的公钥。保留厂商 shell 条目以满足其白名单；独立副本实际执行 POSIX shell。
+6. 使用独立 systemd 单元、绑定指定 LAN 地址和端口，关闭密码和转发；验证根身份、命令/标准流/退出码/PTY以及无密钥拒绝。
+7. 验证成功才写入 commit 标记并保留服务，清理本次共享账户；失败请求回退。不因清理请求发出就宣称清理完成。
+
+默认所有操作均为只读计划。实际引导需要 `--apply --experimental`；它不用于已启用 SSH 的设备。
+
+## 保存的位置
+
+以下是产品的通用路径，未包含任何真实使用者的数据：
+
+| 内容 | 路径 |
+|---|---|
+| 独立程序、主机密钥、root 条目备份 | `/data/xiaomi-nas-ssh/` |
+| root 的专用可写 home | `/home/xiaomi-nas-ssh/` |
+| systemd 单元 | `/etc/systemd/system/xiaomi-key-ssh.service` |
+| 本次引导/恢复文件 | `/etc/.nas-ssh-<random-token>/`，仅 root 访问 |
+| 空的临时目录保留归档 | `/data/xiaomi-nas-ssh-cleanup/<random-token>/` |
+| 本机恢复日志及固定主机公钥 | 自己的 `state-dir`，默认在 home 的私有状态目录 |
+
+## 回退已安装的本项目服务
+
+这些步骤仅适用于**本项目安装器**创建的路径与标记，不能套用于其他工具或手动配置。
+
+在已验证的 owner SSH root 会话中读取 `/data/xiaomi-nas-ssh/stage-path`，核对它指向本项目自己的 `.nas-ssh-<random-token>` 目录，并检查 `root.before`、`setup-token` 与配置。然后在自己的 root 通道执行：
+
+```sh
+# STAGE 必须是你已经核对过的本次安装目录。
+PYTHONDONTWRITEBYTECODE=1 python3 "$STAGE/device.py" "$STAGE/config.json" rollback
+```
+
+这会恢复原 root 记录、停用独立 SSH 服务并保留本次配置归档，可能使 SSH 连接关闭。回退不覆盖其他用户的账户记录，不删除用户文件。网络断开/根执行未触发时自动回退无法保证完成，需要所有者检查私有恢复日志和管理界面。
+
+## 验证声明
+
+原始分阶段手动流程在一台授权 RP05 上成功，包括读取 root 状态、生成独立服务副本和清理临时入口。为了保护现有数据，公开重构版没有在这台已配置的设备上再次做破坏性“重新解锁”测试；只运行了只读验证。单元测试和合成输入不等于全新设备端到端验收。
