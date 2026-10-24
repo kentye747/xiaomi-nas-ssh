@@ -25,7 +25,7 @@
 可在 [Releases](https://github.com/kentye747/xiaomi-nas-ssh/releases) 下载源码 ZIP、Python wheel 和 SHA-256 校验和。也可直接在自己的虚拟环境安装固定版本：
 
 ```sh
-python -m pip install "git+https://github.com/kentye747/xiaomi-nas-ssh.git@v0.1.1"
+python -m pip install "git+https://github.com/kentye747/xiaomi-nas-ssh.git@v0.2.0"
 ```
 
 从 GitHub 下载源码后，在项目目录运行：
@@ -142,7 +142,18 @@ python -m unittest discover -s tests -v
 python tools/audit_release.py
 ```
 
-测试使用合成数据和本地临时目录，不连接真实设备。发布前还会检查 Git 历史、构建包、提交作者及文件清单。不要把运行目录、诊断日志、证书、密钥或 NAS 配置提交到仓库。任何新的型号、固件或全新设备端到端验证都应单独记录，不能据一次成功外推兼容性。
+测试使用合成数据和本地临时目录，不连接真实设备。安装测试依赖后可运行完整安全验证：
+
+```sh
+python -m pip install ".[test]"
+python -m unittest discover -s tests -v
+```
+
+v0.2.0 增加原子恢复日志、本机互斥锁、设备操作锁、暂存文件指纹和 SSH 提交确认；清理后再次验证 SSH。测试包括真实控制器与辅助程序在临时目录中的组合运行、故障注入、临时证书的本机 mTLS 握手，以及 AArch64 指令模拟。SMB 服务端、真实固件全链、动态加载器行为和断电/重启仍未端到端验证。
+
+只使用同一操作者、同一个私有 `state-dir` 处理设备。存在未完成日志时拒绝再次安装。旧版未完成日志缺少程序指纹时，自动恢复会拒绝改写远端暂存文件；请保留日志及原版本，先人工核对，不能通过删日志强行重跑。临时账户已经消失，也不代表 root 设置已回退，输出 `configuration_review_required` 时仍须本机人工检查。
+
+发布前还会检查 Git 历史、构建包、提交作者及文件清单。不要把运行目录、诊断日志、证书、密钥或 NAS 配置提交到仓库。任何新的型号、固件或全新设备端到端验证都应单独记录，不能据一次成功外推兼容性。
 
 ## 来源与许可
 

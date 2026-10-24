@@ -35,3 +35,11 @@ result = verify_ssh(SSHConfig(alias="owner-nas"))
 ```
 
 The repository contains no real device addresses, IDs, credentials, certificates, keys, transcripts, personal files or vendor executables. Do not attach them to issues. Source is MIT licensed; public methodology references and third-party boundaries are in [NOTICE](NOTICE.md).
+
+## v0.2.0 safety verification
+
+Recovery journals are atomically replaced, owner-only, and protected by a local operation lock. Staged helper/configuration fingerprints are checked before recovery. A device-side lock serializes install, commit, cleanup and watchdog actions. Commit is acknowledged through verified SSH; SSH is checked again after cleanup. Root-field changes and archive conflicts are preserved for manual review. Failed rollback never creates a cleanup success marker.
+
+Use one operator and the same private state directory per device. An unfinished session blocks another install. Older unfinished journals without helper fingerprints require manual review; do not discard journals to bypass this refusal. An absent temporary account does not establish rollback success.
+
+Install `.[test]` for loopback mTLS tests and Unicorn AArch64 emulation. All syscall outcomes are synthetic and intercepted; no emulator operation touches host loader/account files. Controller/helper integration uses temporary trees and fakes the management, SMB, SSH, kernel and service-command boundaries. A real SMB server, firmware bootstrap, ELF dynamic loading, reboot and power loss remain unverified.

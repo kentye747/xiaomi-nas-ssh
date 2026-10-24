@@ -1,14 +1,17 @@
 """Self-contained root-side helpers, staged by the owner. No import-time effects."""
 import base64
+import fcntl
 import hashlib
 import ipaddress
 import json
 import os
 import re
 import shutil
+import stat
 import struct
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 INSTALL = Path("/data/xiaomi-nas-ssh")
@@ -27,6 +30,8 @@ def atomic_bytes(path, value, mode=0o600):
     os.fchmod(fd, mode)
     with os.fdopen(fd, "wb") as output:
         output.write(value)
+        output.flush()
+        os.fsync(output.fileno())
     os.replace(temporary, path)
 
 
@@ -65,9 +70,9 @@ def install(config, stage):
     if len(decoded) != 51 or decoded[:19] != b"\0\0\0\x0bssh-ed25519\0\0\0\x20":
         raise ValueError("invalid_public_key")
     INSTALL.mkdir(mode=0o700)
-    (INSTALL / "setup-token").write_text(config["token"])
-    (INSTALL / "root.before").write_text(before)
-    (INSTALL / "stage-path").write_text(str(stage))
+    atomic_bytes(INSTALL / "setup-token", config["token"].encode())
+    atomic_bytes(INSTALL / "root.before", before.encode())
+    atomic_bytes(INSTALL / "stage-path", str(stage).encode())
     (HOME / ".ssh").mkdir(parents=True, mode=0o700)
     HOME.chmod(0o700)
     existing = Path("/root/.ssh/authorized_keys")
@@ -106,18 +111,59 @@ def rollback(config):
         current = root_line().split(":")
         # Preserve subsequent changes to unrelated accounts and refuse an unexpected root home.
         original_fields = before.read_text().split(":")
-        if current[5] not in (str(HOME), original_fields[5]):
+        expected = original_fields.copy()
+        expected[5] = str(HOME)
+        if current not in (expected, original_fields):
             raise ValueError("root_account_changed_requires_manual_review")
-        if current[5] == str(HOME):
+        if current == expected:
             replace_root(before.read_text())
-    run(["systemctl", "disable", "--now", UNIT.name], check=False)
+    if UNIT.exists():
+        run(["systemctl", "disable", "--now", UNIT.name])
     archive = INSTALL / "rollback-archive"
     archive.mkdir(mode=0o700, exist_ok=True)
     if UNIT.exists():
+        if (archive / UNIT.name).exists():
+            raise ValueError("rollback_archive_conflict")
         shutil.move(str(UNIT), str(archive / UNIT.name))
     if HOME.exists():
+        if (archive / "root-home").exists():
+            raise ValueError("rollback_archive_conflict")
         shutil.move(str(HOME), str(archive / "root-home"))
     run(["systemctl", "daemon-reload"])
+
+
+@contextmanager
+def action_lock(stage):
+    fd = os.open(stage / "action.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+            raise ValueError("unsafe_action_lock")
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def is_committed(stage):
+    marker = stage / "committed"
+    if marker.is_symlink():
+        raise ValueError("unsafe_commit_marker")
+    if not marker.exists():
+        return False
+    if not marker.is_file() or marker.read_bytes() != b"verified\n":
+        raise ValueError("unsafe_commit_marker")
+    return True
+
+
+def commit(config, stage):
+    if (not (INSTALL / "setup-token").exists()
+            or (INSTALL / "setup-token").read_text() != config["token"]
+            or root_line().split(":")[5] != str(HOME) or not UNIT.is_file()):
+        raise ValueError("installation_no_longer_active")
+    run(["systemctl", "is-active", "--quiet", UNIT.name])
+    atomic_bytes(stage / "committed", b"verified\n")
 
 
 def cleanup(config, stage, undo=False):
@@ -134,32 +180,45 @@ def cleanup(config, stage, undo=False):
         loader.rename(stage / "preload.disarmed-by-cleanup")
     section = "u" + config["uid"] + "_2"
     account = run(["uci", "-q", "get", "sambauser." + section + ".name"], check=False)
-    if account.returncode == 0:
-        if account.stdout.strip() != ("u" + config["uid"]).encode():
+    share_path = run(["uci", "-q", "get", "sambashare." + section + ".path"], check=False)
+    if account.returncode not in (0, 1) or share_path.returncode not in (0, 1):
+        raise ValueError("account_state_unavailable")
+    if account.returncode == 0 or share_path.returncode == 0:
+        if account.returncode != 0 or account.stdout.strip() != ("u" + config["uid"]).encode():
             raise ValueError("foreign_samba_account_refused")
-        share_path = run(["uci", "-q", "get", "sambashare." + section + ".path"], check=False)
-        if share_path.returncode == 0 and share_path.stdout.strip() != b"/etc":
+        if share_path.returncode != 0 or share_path.stdout.strip() != b"/etc":
             raise ValueError("unexpected_share_path_refused")
         for kind in ("sambashare", "sambauser"):
-            run(["uci", "-q", "delete", kind + "." + section], check=False)
+            run(["uci", "-q", "delete", kind + "." + section])
             run(["uci", "-q", "commit", kind])
+        for key in ("sambauser." + section + ".name", "sambashare." + section + ".path"):
+            if run(["uci", "-q", "get", key], check=False).returncode != 1:
+                raise ValueError("temporary_account_removal_not_verified")
         run(["/usr/bin/smb_mgr.sh", "user", "delete", "u" + config["uid"]])
         run(["/usr/bin/smb_mgr.sh", "reload"])
     source = Path("/home/u" + config["uid"] + "/pool0/data") / config["directory_name"]
+    if source.is_symlink():
+        raise ValueError("symlink_staging_directory_preserved")
     if source.is_dir():
         if any(source.iterdir()):
             raise ValueError("nonempty_staging_directory_preserved")
         # Preserve the empty directory outside the user share rather than delete anything.
         archive = Path("/data/xiaomi-nas-ssh-cleanup") / config["token"]
         archive.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if (archive / "empty-staging").exists():
+            raise ValueError("cleanup_archive_conflict")
         shutil.move(str(source), str(archive / "empty-staging"))
-    atomic_bytes(stage / "cleanup-complete", b"ok\n")
     if rollback_failed:
         raise ValueError("temporary_account_removed_rollback_requires_review")
+    atomic_bytes(stage / "cleanup-complete", b"ok\n")
 
 
 def main():
+    if len(sys.argv) != 3:
+        raise SystemExit(2)
     config_path = Path(sys.argv[1])
+    if config_path.name != "config.json" or config_path.is_symlink():
+        raise SystemExit(2)
     stage = config_path.parent
     if os.getuid() != 0 or not re.fullmatch(r"/etc/\.nas-ssh-[0-9a-f]{12}", str(stage)):
         raise SystemExit(2)
@@ -177,15 +236,24 @@ def main():
     host = ipaddress.IPv4Address(config["host"])
     if not any(host in ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")):
         raise SystemExit(2)
-    if not 1 <= config["port"] <= 65535:
+    if type(config["port"]) is not int or not 1 <= config["port"] <= 65535:
         raise SystemExit(2)
-    action = sys.argv[2]
+    with action_lock(stage):
+        dispatch(config, stage, sys.argv[2])
+
+
+def dispatch(config, stage, action):
     try:
         if action == "install":
             install(config, stage)
+        elif action == "commit":
+            commit(config, stage)
+        elif action == "recover":
+            # Decide under the device lock, after any pending SSH commit finishes.
+            cleanup(config, stage, undo=not is_committed(stage))
         elif action == "watchdog":
             if not (stage / "cleanup-complete").exists():
-                cleanup(config, stage, undo=not (stage / "committed").exists())
+                cleanup(config, stage, undo=not is_committed(stage))
         elif action in ("cleanup", "rollback"):
             cleanup(config, stage, undo=action == "rollback")
         else:

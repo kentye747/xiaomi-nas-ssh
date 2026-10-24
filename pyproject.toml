@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaomi-nas-ssh"
-version = "0.1.1"
+version = "0.2.0"
 description = "Owner-operated, key-only SSH tooling for Xiaomi Smart Storage RP05"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "Xiaomi NAS SSH contributors"}]
-dependencies = ["cryptography>=42", "smbprotocol>=1.15,<2"]
+dependencies = ["cryptography[ssh]>=42", "smbprotocol>=1.15,<2"]
+
+[project.optional-dependencies]
+test = ["unicorn>=2.1,<3"]
 
 [project.urls]
 Repository = "https://github.com/kentye747/xiaomi-nas-ssh"

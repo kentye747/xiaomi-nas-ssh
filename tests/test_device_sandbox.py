@@ -11,7 +11,7 @@ from test_core import synthetic_elf, synthetic_public_key
 from xiaomi_nas_ssh import device
 
 
-class DeviceSandboxTests(unittest.TestCase):
+class DeviceSandbox:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -63,6 +63,8 @@ class DeviceSandboxTests(unittest.TestCase):
         output = (synthetic_public_key() + " synthetic-host\n").encode() if argv[:2] == ["dropbearkey", "-y"] else b""
         return subprocess.CompletedProcess(argv, 0, output, b"")
 
+
+class DeviceSandboxTests(DeviceSandbox, unittest.TestCase):
     def test_install_preserves_other_accounts_and_vendor_input(self):
         with patch.object(device, "run", side_effect=self.fake_run):
             device.install(self.config, self.stage)

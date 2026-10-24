@@ -53,6 +53,9 @@ class ControllerFlowTests(unittest.TestCase):
                 "ready": ready, "host_public_key": synthetic_public_key()}).encode()
 
         def cleanup_run(argv, **kwargs):
+            if argv[-1].endswith(" commit"):
+                share.files[next(k.rsplit("/", 1)[0] for k in share.files if k.endswith("/config.json")) + "/committed"] = b"verified\n"
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
             if not cleanup_exit:
                 rows[:] = copy.deepcopy(original)
             return subprocess.CompletedProcess(argv, cleanup_exit, b"", b"")
@@ -61,7 +64,8 @@ class ControllerFlowTests(unittest.TestCase):
             identity = Path(directory) / "owner-key"
             Path(str(identity) + ".pub").write_text(synthetic_public_key() + " test-comment")
             state_dir = Path(directory) / "state"
-            with patch.object(module.socket, "create_connection", side_effect=ConnectionRefusedError), \
+            with patch.object(module, "validate_identity"), \
+                    patch.object(module.socket, "create_connection", side_effect=ConnectionRefusedError), \
                     patch.object(module, "Share", return_value=share), \
                     patch.object(module, "arm", side_effect=activate), \
                     patch.object(module, "verify_ssh", return_value={"passed": ssh_passes, "checks": {"synthetic": ssh_passes}}), \

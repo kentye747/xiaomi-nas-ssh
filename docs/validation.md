@@ -26,3 +26,13 @@ The generated initializer is checked for ELF architecture, branch targets, strin
 - Windows/native GUI operation.
 
 New observations should be recorded without personal data and without broadening these claims based only on unit-test success.
+
+## v0.2.0 isolated verification
+
+- The real controller and root helper run together against a temporary filesystem. Management API, encrypted SMB, SSH, kernel activation and OS/service commands are simulated boundaries. Existing synthetic backup bytes and original account records are checked after each scenario.
+- Faults cover host-key generation, command verification, interruption, watchdog-before-commit, UCI deletion, extra accounts, SMB connection failure, staging collision, missing root execution, lost commit acknowledgement and post-cleanup verification failure.
+- Real loopback TLS uses ephemeral synthetic CA/server/client keys. Successful mutual authentication, wrong server identity, missing client certificate and read-only planning are checked. No real certificates are fixtures.
+- [Unicorn](https://www.unicorn-engine.org/docs/tutorial.html) executes the generated AArch64 instructions. Every syscall is intercepted: UID gates, failed atomic claim, parent return, clone failure, child argv/envp and failed-exec exit. The existing independent clang assembler comparison remains. This does not test a real kernel or the vendor dynamic loader.
+- Local atomic replacement failure preserves the previous journal; hardlink/symlink guards, concurrent operation refusal and device-lock serialization across processes are checked.
+
+No test restarts a real NAS service, creates a real NAS account/share/preload, reboots the device, writes to existing NAS files or changes backups. SMB wire-protocol compatibility and clean-device first activation remain experimental.
